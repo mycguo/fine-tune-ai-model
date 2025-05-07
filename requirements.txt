@@ -1,0 +1,11 @@
+# https://www.youtube.com/watch?v=RnF2007HqtY
+streamlit
+xformers
+unsloth
+trl 
+peft 
+accelerate 
+bitsandbytes
+torch
+datasets
+transformers
