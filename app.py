@@ -26,7 +26,7 @@ model = FastLanguageModel.get_peft_model(
                       "gate_proj", "up_proj", "down_proj",],
     lora_alpha = 16,
     lora_dropout = 0,
-    bias = "none",    *
+    bias = "none",
     use_gradient_checkpointing = "unsloth",
     random_state = 3407,
     use_rslora = False,
