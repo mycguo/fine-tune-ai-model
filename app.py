@@ -13,11 +13,14 @@ max_seq_length = 2048
 # Check if we're on macOS
 is_mac = platform.system() == "Darwin"
 
+# Set device
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 model = AutoModelForCausalLM.from_pretrained(
     "gpt2",
     torch_dtype=torch.float32,  # Always use float32
-    device_map="auto"
-)
+    device_map=None  # Don't use device_map
+).to(device)  # Move model to device after loading
 
 tokenizer = AutoTokenizer.from_pretrained(
     "gpt2",
@@ -67,26 +70,27 @@ def formatting_prompts_func(examples):
 dataset = load_dataset("BoltMonkey/psychology-question-answer", split="train")
 dataset = dataset.map(formatting_prompts_func, batched=True)
 
-
+# Modified training arguments for CPU
+training_args = TrainingArguments(
+    per_device_train_batch_size=1,  # Reduced batch size for CPU
+    gradient_accumulation_steps=4,
+    warmup_steps=5,
+    max_steps=60,
+    learning_rate=2e-4,
+    fp16=False,  # Disable mixed precision training
+    bf16=False,  # Disable bfloat16 training
+    logging_steps=1,
+    optim="adamw_torch",
+    weight_decay=0.01,
+    lr_scheduler_type="linear",
+    seed=3407,
+    output_dir="outputs",
+)
 
 trainer = SFTTrainer(
     model=model,
     train_dataset=dataset,
-    args=TrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
-        warmup_steps=5,
-        max_steps=60,
-        learning_rate=2e-4,
-        fp16=False,  # Disable fp16
-        bf16=False,  # Disable bf16
-        logging_steps=1,
-        optim="adamw_torch",  # Use standard AdamW
-        weight_decay=0.01,
-        lr_scheduler_type="linear",
-        seed=3407,
-        output_dir="outputs",
-    ),
+    args=training_args,
     formatting_func=lambda x: x["text"]
 )
 
