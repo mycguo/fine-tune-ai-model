@@ -1,5 +1,6 @@
 # https://www.youtube.com/watch?v=RnF2007HqtY
 # https://www.youtube.com/watch?v=mvIp9TvPMh0
+# https://www.youtube.com/watch?v=9he4XKqqzvE
 streamlit
 torch
 transformers
