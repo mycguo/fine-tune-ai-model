@@ -146,7 +146,7 @@ trainer = SFTTrainer(
     model=model,
     train_dataset=train_dataset,
     args=training_args,
-    sft_config=sft_config
+    formatting_func=lambda x: x["text"]
 )
 
 # Training section
