@@ -40,19 +40,29 @@ if os.path.exists("train.json"):
     with open("train.json", "r") as f:
         training_data = json.load(f)
 
+# Load the subset size used during training
+subset_size = 20  # Default to 20 if not found
+if os.path.exists("training_config.json"):
+    with open("training_config.json", "r") as f:
+        config = json.load(f)
+        subset_size = config.get("subset_size", 20)
+
+# Get only the questions used in training
+used_training_data = training_data[:subset_size]
+
 # Display training data
-with st.expander("View Training Data", expanded=False):
-    st.markdown("### Training Questions Used")
-    st.markdown("These are the questions used to fine-tune the model:")
+with st.expander("View Training Questions Used", expanded=False):
+    st.markdown("### Questions Used in Fine-tuning")
+    st.markdown(f"These are the {subset_size} questions that were used to fine-tune the model:")
     
     # Create a search box for filtering questions
     search_query = st.text_input("Search training questions", "")
     
     # Filter questions based on search
-    filtered_data = training_data
+    filtered_data = used_training_data
     if search_query:
         filtered_data = [
-            item for item in training_data 
+            item for item in used_training_data 
             if search_query.lower() in item['question'].lower() or 
                search_query.lower() in item['answer'].lower()
         ]
@@ -68,14 +78,14 @@ with st.expander("View Training Data", expanded=False):
                     st.markdown(f"**A{i}:** {item['answer']}")
                 st.markdown("---")
         
-        st.markdown(f"Showing {len(filtered_data)} of {len(training_data)} training examples")
+        st.markdown(f"Showing {len(filtered_data)} of {len(used_training_data)} training examples")
     else:
         st.info("No training data found or no matches for your search.")
 
 # Sample questions from training data
 sample_questions = [
-    item['question'] for item in training_data[:5]
-] if training_data else [
+    item['question'] for item in used_training_data[:5]
+] if used_training_data else [
     "What is cognitive behavioral therapy?",
     "How does stress affect mental health?",
     "What are the symptoms of anxiety?",

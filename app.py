@@ -109,6 +109,15 @@ if st.button("Start Training"):
             # Use smaller subset
             training_data = dataset[:subset_size]
             
+            # Save training configuration
+            with open("training_config.json", "w") as f:
+                json.dump({
+                    "subset_size": subset_size,
+                    "model": model_name,
+                    "batch_size": batch_size,
+                    "n_epochs": n_epochs
+                }, f)
+            
             with open(training_file_path, 'w') as f:
                 for item in training_data:
                     f.write(json.dumps(item) + '\n')
