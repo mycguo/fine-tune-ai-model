@@ -7,6 +7,7 @@ from transformers import TrainingArguments
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import platform
 import os
+from datasets import Dataset
 
 # Set page config
 st.set_page_config(
@@ -26,29 +27,24 @@ The model will be trained to provide more focused and accurate responses to psyc
 def load_and_prepare_dataset():
     try:
         with st.spinner("Loading dataset..."):
-            dataset = load_dataset(
-                "BoltMonkey/psychology-question-answer",
-                split="train",
-                trust_remote_code=True
-            )
+            # Load dataset from local JSON file
+            import json
+            with open('train.json', 'r') as f:
+                data = json.load(f)
             
-            def formatting_prompts_func(example):
-                texts = []
-                for question, answer in zip(example["question"], example["answer"]):
-                    text = f"Question: {question}\nAnswer: {answer}"
-                    texts.append(text)
-                return {"text": texts}
+            # Convert to the format expected by the training pipeline
+            texts = []
+            for item in data:
+                text = f"Question: {item['question']}\nAnswer: {item['answer']}"
+                texts.append(text)
             
-            dataset = dataset.map(
-                formatting_prompts_func,
-                batched=True,
-                remove_columns=dataset.column_names
-            )
+            # Create a simple dataset dictionary
+            dataset = {"text": texts}
             
             return dataset
     except Exception as e:
         st.error(f"Error loading dataset: {str(e)}")
-        st.info("Please check your internet connection and try again.")
+        st.info("Please make sure train.json exists in the current directory.")
         return None
 
 # Load dataset
@@ -58,9 +54,9 @@ if dataset is None:
 
 # Display dataset info
 st.subheader("Dataset Information")
-st.write(f"Number of examples: {len(dataset)}")
+st.write(f"Number of examples: {len(dataset['text'])}")
 st.write("Example data:")
-st.write(dataset[0])
+st.write(dataset['text'][0])
 
 # Model configuration
 st.subheader("Model Configuration")
@@ -112,6 +108,8 @@ def load_model_and_tokenizer():
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             tokenizer.pad_token = tokenizer.eos_token
             model.config.pad_token_id = tokenizer.pad_token_id
+            # Set the model's maximum sequence length
+            model.config.max_position_embeddings = max_length
             return model, tokenizer
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
@@ -135,26 +133,13 @@ lora_config = LoraConfig(
 model = prepare_model_for_kbit_training(model)
 model = get_peft_model(model, lora_config)
 
-# Tokenize dataset
-def tokenize_function(examples):
-    return tokenizer(
-        examples["text"],
-        padding="max_length",
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt"
-    )
-
-tokenized_dataset = dataset.map(
-    tokenize_function,
-    batched=True,
-    remove_columns=dataset.column_names
-)
+# Convert our data to a HuggingFace Dataset
+train_dataset = Dataset.from_dict({"text": dataset["text"]})
 
 # Create trainer
 trainer = SFTTrainer(
     model=model,
-    train_dataset=tokenized_dataset,
+    train_dataset=train_dataset,
     args=training_args
 )
 
