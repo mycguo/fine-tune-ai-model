@@ -5,8 +5,17 @@ from datasets import load_dataset
 import pprint
 from trl import SFTTrainer
 from transformers import TrainingArguments
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import platform
+import os
+import asyncio
+import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
+
+# Disable Streamlit's file watcher
+os.environ['STREAMLIT_SERVER_WATCH_DIRS'] = 'false'
 
 max_seq_length = 2048
 
@@ -16,147 +25,227 @@ is_mac = platform.system() == "Darwin"
 # Set device
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = AutoModelForCausalLM.from_pretrained(
-    "gpt2",
-    torch_dtype=torch.float32,  # Always use float32
-    device_map=None  # Don't use device_map
-).to(device)  # Move model to device after loading
-
-tokenizer = AutoTokenizer.from_pretrained(
-    "gpt2",
-    padding_side="right"
+# Set page config
+st.set_page_config(
+    page_title="Fine-tune GPT-2 for Psychology Q&A",
+    page_icon="🧠",
+    layout="wide"
 )
-tokenizer.pad_token = tokenizer.eos_token
+
+# Title and description
+st.title("Fine-tune GPT-2 for Psychology Q&A")
+st.markdown("""
+This app allows you to fine-tune a GPT-2 model on psychology Q&A data using LoRA.
+The model will be trained to provide more focused and accurate responses to psychology-related questions.
+""")
+
+# Function to load and prepare dataset
+def load_and_prepare_dataset():
+    try:
+        with st.spinner("Loading dataset..."):
+            # Try to load the dataset with a timeout
+            dataset = load_dataset(
+                "BoltMonkey/psychology-question-answer",
+                split="train",
+                trust_remote_code=True
+            )
+            
+            # Format the prompts
+            def formatting_prompts_func(example):
+                texts = []
+                for question, answer in zip(example["question"], example["answer"]):
+                    text = f"Question: {question}\nAnswer: {answer}"
+                    texts.append(text)
+                return {"text": texts}
+            
+            # Map the formatting function
+            dataset = dataset.map(
+                formatting_prompts_func,
+                batched=True,
+                remove_columns=dataset.column_names
+            )
+            
+            return dataset
+    except Exception as e:
+        st.error(f"Error loading dataset: {str(e)}")
+        st.info("Please check your internet connection and try again.")
+        return None
+
+# Load dataset
+dataset = load_and_prepare_dataset()
+if dataset is None:
+    st.stop()
+
+# Display dataset info
+st.subheader("Dataset Information")
+st.write(f"Number of examples: {len(dataset)}")
+st.write("Example data:")
+st.write(dataset[0])
+
+# Model configuration
+st.subheader("Model Configuration")
+model_name = st.selectbox(
+    "Select base model",
+    ["gpt2", "gpt2-medium", "gpt2-large"],
+    index=0
+)
+
+# Training configuration
+st.subheader("Training Configuration")
+learning_rate = st.slider("Learning rate", 1e-5, 1e-3, 2e-4, format="%.2e")
+num_epochs = st.slider("Number of epochs", 1, 5, 1)
+batch_size = st.slider("Batch size", 1, 16, 8)
+max_length = st.slider("Max sequence length", 128, 512, 256)
+
+# LoRA configuration
+st.subheader("LoRA Configuration")
+lora_r = st.slider("LoRA rank (r)", 4, 32, 8)
+lora_alpha = st.slider("LoRA alpha", 8, 64, 16)
+lora_dropout = st.slider("LoRA dropout", 0.0, 0.5, 0.1)
+
+# Training arguments
+training_args = TrainingArguments(
+    output_dir="fine_tuned_model",
+    learning_rate=learning_rate,
+    num_train_epochs=num_epochs,
+    per_device_train_batch_size=batch_size,
+    max_steps=100,
+    logging_steps=5,
+    save_steps=50,
+    save_total_limit=1,
+    remove_unused_columns=False,
+    push_to_hub=False,
+    report_to="none",
+    gradient_accumulation_steps=2,
+    warmup_steps=10,
+    weight_decay=0.01,
+    lr_scheduler_type="linear",
+    seed=42
+)
+
+# Load model and tokenizer
+@st.cache_resource
+def load_model_and_tokenizer():
+    try:
+        with st.spinner("Loading model and tokenizer..."):
+            model = AutoModelForCausalLM.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer.pad_token = tokenizer.eos_token
+            model.config.pad_token_id = tokenizer.pad_token_id
+            return model, tokenizer
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        return None, None
+
+model, tokenizer = load_model_and_tokenizer()
+if model is None or tokenizer is None:
+    st.stop()
 
 # Configure LoRA
 lora_config = LoraConfig(
-    r=16,
-    lora_alpha=16,
-    target_modules=[
-        "c_attn",  # GPT-2's attention module
-        "c_proj",  # GPT-2's output projection
-        "c_fc",    # GPT-2's feed-forward up projection
-        "c_proj"   # GPT-2's feed-forward down projection
-    ],
-    lora_dropout=0,
+    r=lora_r,
+    lora_alpha=lora_alpha,
+    target_modules=["c_attn", "c_proj"],  # GPT-2 specific attention modules
+    lora_dropout=lora_dropout,
     bias="none",
     task_type="CAUSAL_LM"
 )
 
+# Prepare model for training
+model = prepare_model_for_kbit_training(model)
 model = get_peft_model(model, lora_config)
 
-chat_prompt = """
-### Instruction:
-{}
+# Tokenize dataset
+def tokenize_function(examples):
+    return tokenizer(
+        examples["text"],
+        padding="max_length",
+        truncation=True,
+        max_length=max_length
+    )
 
-### Input:
-{}
-
-### Response:
-{}"""
-
-EOS_TOKEN = tokenizer.eos_token # Must add EOS_TOKEN
-def formatting_prompts_func(examples):
-    instruction = ""
-    inputs = examples["question"]
-    outputs = examples["answer"]
-    texts = []
-    for input, output in zip(inputs, outputs):
-        # Must add EOS_TOKEN, otherwise your generation will go on forever!
-        text = chat_prompt.format(instruction, input, output) + EOS_TOKEN
-        texts.append(text)
-    return {"text": texts}
-
-dataset = load_dataset("BoltMonkey/psychology-question-answer", split="train")
-dataset = dataset.map(formatting_prompts_func, batched=True)
-
-# Modified training arguments for CPU
-training_args = TrainingArguments(
-    per_device_train_batch_size=1,  # Reduced batch size for CPU
-    gradient_accumulation_steps=4,
-    warmup_steps=5,
-    max_steps=60,
-    learning_rate=2e-4,
-    fp16=False,  # Disable mixed precision training
-    bf16=False,  # Disable bfloat16 training
-    logging_steps=1,
-    optim="adamw_torch",
-    weight_decay=0.01,
-    lr_scheduler_type="linear",
-    seed=3407,
-    output_dir="outputs",
+tokenized_dataset = dataset.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=dataset.column_names
 )
 
+# Create trainer
 trainer = SFTTrainer(
     model=model,
-    train_dataset=dataset,
+    train_dataset=tokenized_dataset,
     args=training_args,
     formatting_func=lambda x: x["text"]
 )
 
 def main():
-    st.title("Fine tuning LLM")
-    st.header("Fine tuning LLM with custom dataset")
-
-    button1 = st.button("Click the button to start training")
-    if button1:
-        with st.spinner('Training in progress...'):
-            trainer_stats = trainer.train()
-            
-            # Display training metrics
-            st.subheader("Training Statistics")
-            
-            # Create columns for metrics
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric("Training Loss", f"{trainer_stats.training_loss:.4f}")
+    # Training button
+    if st.button("Start Training"):
+        try:
+            with st.spinner("Training in progress..."):
+                # Train the model
+                trainer_stats = trainer.train()
                 
-            with col2:
-                st.metric("Steps", f"{trainer_stats.global_step}")
-            
-            # Display detailed metrics in an expander
-            with st.expander("Detailed Training Metrics"):
-                metrics_dict = {
-                    "training_loss": trainer_stats.training_loss,
-                    "global_step": trainer_stats.global_step
-                }
-                st.json(metrics_dict)
-            
-            # Save the model
-            save_path = "fine_tuned_model"
-            model.save_pretrained(save_path)
-            tokenizer.save_pretrained(save_path)
-            
-            # Create a zip file of the saved model
-            import shutil
-            shutil.make_archive("fine_tuned_model", 'zip', save_path)
-            
-            # Display download button
-            with open("fine_tuned_model.zip", "rb") as file:
-                st.download_button(
-                    label="Download Fine-tuned Model",
-                    data=file,
-                    file_name="fine_tuned_model.zip",
-                    mime="application/zip"
-                )
-            
-            # Display a success message
-            st.success("Training completed successfully! Model has been saved.")
-    
-    st.markdown("<div style='height:300px;'></div>", unsafe_allow_html=True)
-    st.markdown(""" \n \n \n \n \n \n \n\n\n\n\n\n
-        # Footnote on tech stack
-        web framework: https://streamlit.io/ \n
-        LLM model: "gpt2" \n
-    """)    
+                # Display training metrics
+                st.subheader("Training Statistics")
+                
+                # Create columns for metrics
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.metric("Training Loss", f"{trainer_stats.training_loss:.4f}")
+                    
+                with col2:
+                    st.metric("Steps", f"{trainer_stats.global_step}")
+                
+                # Display detailed metrics in an expander
+                with st.expander("Detailed Training Metrics"):
+                    metrics_dict = {
+                        "training_loss": trainer_stats.training_loss,
+                        "global_step": trainer_stats.global_step
+                    }
+                    st.json(metrics_dict)
+                
+                # Save the model
+                trainer.save_model()
+                tokenizer.save_pretrained("fine_tuned_model")
+                
+                # Create a zip file of the saved model
+                import shutil
+                shutil.make_archive("fine_tuned_model", 'zip', "fine_tuned_model")
+                
+                # Display download button
+                with open("fine_tuned_model.zip", "rb") as file:
+                    st.download_button(
+                        label="Download Fine-tuned Model",
+                        data=file,
+                        file_name="fine_tuned_model.zip",
+                        mime="application/zip"
+                    )
+                
+                # Display a success message
+                st.success("Training completed successfully! Model has been saved.")
+        except Exception as e:
+            st.error(f"Error during training: {str(e)}")
 
-    # Display example data in Streamlit
-    st.subheader("Example Data")
-    st.write("Sample 250:")
-    st.json(dataset[250])
-    st.write("Sample 260:")
-    st.json(dataset[260])
+    # Add some information about the tech stack
+    st.markdown("---")
+    with st.expander("About the Tech Stack"):
+        st.markdown("""
+        ### Technologies Used
+        - **Base Model**: GPT-2 (Hugging Face Transformers)
+        - **Fine-tuning Method**: LoRA (Low-Rank Adaptation)
+        - **Dataset**: Psychology Q&A Dataset
+        - **Framework**: PyTorch
+        - **UI**: Streamlit
+        
+        ### Why LoRA?
+        LoRA is an efficient fine-tuning method that:
+        - Reduces memory usage
+        - Speeds up training
+        - Maintains model quality
+        - Allows for easy model switching
+        """)
 
 if __name__ == "__main__":
     main()
