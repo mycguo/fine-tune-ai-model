@@ -34,8 +34,48 @@ else:
     st.warning("No fine-tuned model found. Please complete the training process first.")
     st.stop()
 
-# Sample questions
+# Load training data
+training_data = []
+if os.path.exists("train.json"):
+    with open("train.json", "r") as f:
+        training_data = json.load(f)
+
+# Display training data
+with st.expander("View Training Data", expanded=False):
+    st.markdown("### Training Questions Used")
+    st.markdown("These are the questions used to fine-tune the model:")
+    
+    # Create a search box for filtering questions
+    search_query = st.text_input("Search training questions", "")
+    
+    # Filter questions based on search
+    filtered_data = training_data
+    if search_query:
+        filtered_data = [
+            item for item in training_data 
+            if search_query.lower() in item['question'].lower() or 
+               search_query.lower() in item['answer'].lower()
+        ]
+    
+    # Display questions in a table format
+    if filtered_data:
+        for i, item in enumerate(filtered_data, 1):
+            with st.container():
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.markdown(f"**Q{i}:** {item['question']}")
+                with col2:
+                    st.markdown(f"**A{i}:** {item['answer']}")
+                st.markdown("---")
+        
+        st.markdown(f"Showing {len(filtered_data)} of {len(training_data)} training examples")
+    else:
+        st.info("No training data found or no matches for your search.")
+
+# Sample questions from training data
 sample_questions = [
+    item['question'] for item in training_data[:5]
+] if training_data else [
     "What is cognitive behavioral therapy?",
     "How does stress affect mental health?",
     "What are the symptoms of anxiety?",
