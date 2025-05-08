@@ -9,4 +9,3 @@ peft
 accelerate
 bitsandbytes
 datasets
-bitsandbytes

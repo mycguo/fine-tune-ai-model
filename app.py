@@ -2,28 +2,11 @@ import streamlit as st
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from datasets import load_dataset
-import pprint
 from trl import SFTTrainer
 from transformers import TrainingArguments
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import platform
 import os
-import asyncio
-import nest_asyncio
-
-# Apply nest_asyncio to allow nested event loops
-nest_asyncio.apply()
-
-# Disable Streamlit's file watcher
-os.environ['STREAMLIT_SERVER_WATCH_DIRS'] = 'false'
-
-max_seq_length = 2048
-
-# Check if we're on macOS
-is_mac = platform.system() == "Darwin"
-
-# Set device
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Set page config
 st.set_page_config(
@@ -43,14 +26,12 @@ The model will be trained to provide more focused and accurate responses to psyc
 def load_and_prepare_dataset():
     try:
         with st.spinner("Loading dataset..."):
-            # Try to load the dataset with a timeout
             dataset = load_dataset(
                 "BoltMonkey/psychology-question-answer",
                 split="train",
                 trust_remote_code=True
             )
             
-            # Format the prompts
             def formatting_prompts_func(example):
                 texts = []
                 for question, answer in zip(example["question"], example["answer"]):
@@ -58,7 +39,6 @@ def load_and_prepare_dataset():
                     texts.append(text)
                 return {"text": texts}
             
-            # Map the formatting function
             dataset = dataset.map(
                 formatting_prompts_func,
                 batched=True,
@@ -145,7 +125,7 @@ if model is None or tokenizer is None:
 lora_config = LoraConfig(
     r=lora_r,
     lora_alpha=lora_alpha,
-    target_modules=["c_attn", "c_proj"],  # GPT-2 specific attention modules
+    target_modules=["c_attn", "c_proj"],
     lora_dropout=lora_dropout,
     bias="none",
     task_type="CAUSAL_LM"
@@ -161,7 +141,8 @@ def tokenize_function(examples):
         examples["text"],
         padding="max_length",
         truncation=True,
-        max_length=max_length
+        max_length=max_length,
+        return_tensors="pt"
     )
 
 tokenized_dataset = dataset.map(
@@ -174,78 +155,64 @@ tokenized_dataset = dataset.map(
 trainer = SFTTrainer(
     model=model,
     train_dataset=tokenized_dataset,
-    args=training_args,
-    formatting_func=lambda x: x["text"]
+    args=training_args
 )
 
-def main():
-    # Training button
-    if st.button("Start Training"):
-        try:
-            with st.spinner("Training in progress..."):
-                # Train the model
-                trainer_stats = trainer.train()
-                
-                # Display training metrics
-                st.subheader("Training Statistics")
-                
-                # Create columns for metrics
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Training Loss", f"{trainer_stats.training_loss:.4f}")
-                    
-                with col2:
-                    st.metric("Steps", f"{trainer_stats.global_step}")
-                
-                # Display detailed metrics in an expander
-                with st.expander("Detailed Training Metrics"):
-                    metrics_dict = {
-                        "training_loss": trainer_stats.training_loss,
-                        "global_step": trainer_stats.global_step
-                    }
-                    st.json(metrics_dict)
-                
-                # Save the model
-                trainer.save_model()
-                tokenizer.save_pretrained("fine_tuned_model")
-                
-                # Create a zip file of the saved model
-                import shutil
-                shutil.make_archive("fine_tuned_model", 'zip', "fine_tuned_model")
-                
-                # Display download button
-                with open("fine_tuned_model.zip", "rb") as file:
-                    st.download_button(
-                        label="Download Fine-tuned Model",
-                        data=file,
-                        file_name="fine_tuned_model.zip",
-                        mime="application/zip"
-                    )
-                
-                # Display a success message
-                st.success("Training completed successfully! Model has been saved.")
-        except Exception as e:
-            st.error(f"Error during training: {str(e)}")
+# Training section
+st.subheader("Start Training")
+st.markdown("Click the button below to begin the fine-tuning process. This will train the model on the psychology Q&A dataset using the configured parameters.")
 
-    # Add some information about the tech stack
-    st.markdown("---")
-    with st.expander("About the Tech Stack"):
-        st.markdown("""
-        ### Technologies Used
-        - **Base Model**: GPT-2 (Hugging Face Transformers)
-        - **Fine-tuning Method**: LoRA (Low-Rank Adaptation)
-        - **Dataset**: Psychology Q&A Dataset
-        - **Framework**: PyTorch
-        - **UI**: Streamlit
-        
-        ### Why LoRA?
-        LoRA is an efficient fine-tuning method that:
-        - Reduces memory usage
-        - Speeds up training
-        - Maintains model quality
-        - Allows for easy model switching
-        """)
+# Training button
+if st.button("Start Training"):
+    try:
+        with st.spinner("Training in progress..."):
+            trainer_stats = trainer.train()
+            
+            # Display training metrics
+            st.subheader("Training Statistics")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("Training Loss", f"{trainer_stats.training_loss:.4f}")
+            with col2:
+                st.metric("Steps", f"{trainer_stats.global_step}")
+            
+            # Save the model
+            trainer.save_model()
+            tokenizer.save_pretrained("fine_tuned_model")
+            
+            # Create a zip file of the saved model
+            import shutil
+            shutil.make_archive("fine_tuned_model", 'zip', "fine_tuned_model")
+            
+            # Display download button
+            with open("fine_tuned_model.zip", "rb") as file:
+                st.download_button(
+                    label="Download Fine-tuned Model",
+                    data=file,
+                    file_name="fine_tuned_model.zip",
+                    mime="application/zip"
+                )
+            
+            st.success("Training completed successfully! Model has been saved.")
+    except Exception as e:
+        st.error(f"Error during training: {str(e)}")
 
-if __name__ == "__main__":
-    main()
+# Add some information about the tech stack
+st.markdown("---")
+with st.expander("About the Tech Stack"):
+    st.markdown("""
+    ### Technologies Used
+    - **Base Model**: GPT-2 (Hugging Face Transformers)
+    - **Fine-tuning Method**: LoRA (Low-Rank Adaptation)
+    - **Dataset**: Psychology Q&A Dataset
+    - **Framework**: PyTorch
+    - **UI**: Streamlit
+    
+    ### Why LoRA?
+    LoRA is an efficient fine-tuning method that:
+    - Reduces memory usage
+    - Speeds up training
+    - Maintains model quality
+    - Allows for easy model switching
+    """)
