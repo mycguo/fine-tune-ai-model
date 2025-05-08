@@ -96,7 +96,8 @@ training_args = TrainingArguments(
     warmup_steps=10,
     weight_decay=0.01,
     lr_scheduler_type="linear",
-    seed=42
+    seed=42,
+    label_names=["labels"]  # Explicitly set label names
 )
 
 # Load model and tokenizer
@@ -157,11 +158,6 @@ tokenized_dataset = train_dataset.map(
     tokenize_function,
     batched=True,
     remove_columns=train_dataset.column_names
-)
-
-# Create trainer with SFTConfig
-sft_config = SFTConfig(
-    dataset_text_field="text"
 )
 
 # Create trainer
