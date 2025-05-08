@@ -1,47 +1,52 @@
 import streamlit as st
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-from datasets import load_dataset
-from trl import SFTTrainer, SFTConfig
-from transformers import TrainingArguments
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-import platform
+import openai
+import json
 import os
 from datasets import Dataset
+import time
 
 # Set page config
 st.set_page_config(
-    page_title="Fine-tune GPT-2 for Psychology Q&A",
+    page_title="Fine-tune GPT-3 for Psychology Q&A",
     page_icon="🧠",
     layout="wide"
 )
 
 # Title and description
-st.title("Fine-tune GPT-2 for Psychology Q&A")
+st.title("Fine-tune GPT-3 for Psychology Q&A")
 st.markdown("""
-This app allows you to fine-tune a GPT-2 model on psychology Q&A data using LoRA.
+This app allows you to fine-tune a GPT-3 model on psychology Q&A data.
 The model will be trained to provide more focused and accurate responses to psychology-related questions.
 """)
+
+# API Key input
+api_key = st.text_input("Enter your OpenAI API Key", type="password")
+if api_key:
+    openai.api_key = api_key
+else:
+    st.warning("Please enter your OpenAI API key to continue")
+    st.stop()
 
 # Function to load and prepare dataset
 def load_and_prepare_dataset():
     try:
         with st.spinner("Loading dataset..."):
             # Load dataset from local JSON file
-            import json
             with open('train.json', 'r') as f:
                 data = json.load(f)
             
-            # Convert to the format expected by the training pipeline
-            texts = []
+            # Convert to the chat format expected by GPT-3.5-turbo
+            training_data = []
             for item in data:
-                text = f"Question: {item['question']}\nAnswer: {item['answer']}"
-                texts.append(text)
+                training_data.append({
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful psychology assistant."},
+                        {"role": "user", "content": item['question']},
+                        {"role": "assistant", "content": item['answer']}
+                    ]
+                })
             
-            # Create a simple dataset dictionary
-            dataset = {"text": texts}
-            
-            return dataset
+            return training_data
     except Exception as e:
         st.error(f"Error loading dataset: {str(e)}")
         st.info("Please make sure train.json exists in the current directory.")
@@ -54,156 +59,106 @@ if dataset is None:
 
 # Display dataset info
 st.subheader("Dataset Information")
-st.write(f"Number of examples: {len(dataset['text'])}")
+st.write(f"Number of examples: {len(dataset)}")
 st.write("Example data:")
-st.write(dataset['text'][0])
+st.write(dataset[0])
 
 # Model configuration
 st.subheader("Model Configuration")
 model_name = st.selectbox(
     "Select base model",
-    ["gpt2", "gpt2-medium", "gpt2-large"],
+    ["gpt-3.5-turbo"],  # Removed GPT-4 as it's slower
     index=0
 )
 
 # Training configuration
 st.subheader("Training Configuration")
-learning_rate = st.slider("Learning rate", 1e-5, 1e-3, 2e-4, format="%.2e")
-num_epochs = st.slider("Number of epochs", 1, 5, 1)
-batch_size = st.slider("Batch size", 1, 16, 8)
-max_length = st.slider("Max sequence length", 128, 512, 256)
+col1, col2 = st.columns(2)
 
-# LoRA configuration
-st.subheader("LoRA Configuration")
-lora_r = st.slider("LoRA rank (r)", 4, 32, 8)
-lora_alpha = st.slider("LoRA alpha", 8, 64, 16)
-lora_dropout = st.slider("LoRA dropout", 0.0, 0.5, 0.1)
-
-# Training arguments
-training_args = TrainingArguments(
-    output_dir="fine_tuned_model",
-    learning_rate=learning_rate,
-    num_train_epochs=num_epochs,
-    per_device_train_batch_size=batch_size,
-    max_steps=100,
-    logging_steps=5,
-    save_steps=50,
-    save_total_limit=1,
-    remove_unused_columns=False,
-    push_to_hub=False,
-    report_to="none",
-    gradient_accumulation_steps=2,
-    warmup_steps=10,
-    weight_decay=0.01,
-    lr_scheduler_type="linear",
-    seed=42,
-    label_names=["labels"]  # Explicitly set label names
-)
-
-# Load model and tokenizer
-@st.cache_resource
-def load_model_and_tokenizer():
-    try:
-        with st.spinner("Loading model and tokenizer..."):
-            model = AutoModelForCausalLM.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token
-            model.config.pad_token_id = tokenizer.pad_token_id
-            # Set the model's maximum sequence length
-            model.config.max_position_embeddings = max_length
-            return model, tokenizer
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None, None
-
-model, tokenizer = load_model_and_tokenizer()
-if model is None or tokenizer is None:
-    st.stop()
-
-# Configure LoRA
-lora_config = LoraConfig(
-    r=lora_r,
-    lora_alpha=lora_alpha,
-    target_modules=["c_attn", "c_proj"],
-    lora_dropout=lora_dropout,
-    bias="none",
-    task_type="CAUSAL_LM"
-)
-
-# Prepare model for training
-model = prepare_model_for_kbit_training(model)
-model = get_peft_model(model, lora_config)
-
-# Convert our data to a HuggingFace Dataset
-train_dataset = Dataset.from_dict({"text": dataset["text"]})
-
-# Tokenize the dataset
-def tokenize_function(examples):
-    # Tokenize the text
-    tokenized = tokenizer(
-        examples["text"],
-        padding=True,
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt"
-    )
+with col1:
+    # Reduced epochs to just 1
+    n_epochs = 1
+    st.write("Epochs: 1 (fixed for fastest training)")
     
-    # For causal language modeling, the labels are the same as the input_ids
-    tokenized["labels"] = tokenized["input_ids"].clone()
-    
-    return tokenized
+    # Increased default batch size
+    batch_size = st.slider("Batch size", 4, 32, 16, help="Higher batch size = faster training")
 
-# Apply tokenization to the dataset
-tokenized_dataset = train_dataset.map(
-    tokenize_function,
-    batched=True,
-    remove_columns=train_dataset.column_names
-)
-
-# Create trainer
-trainer = SFTTrainer(
-    model=model,
-    train_dataset=tokenized_dataset,
-    args=training_args
-)
+with col2:
+    # Reduced subset size range
+    subset_size = st.slider("Number of training examples", 5, 50, 20, help="Smaller dataset = faster training")
+    st.write("Using a small dataset for quick testing")
 
 # Training section
 st.subheader("Start Training")
-st.markdown("Click the button below to begin the fine-tuning process. This will train the model on the psychology Q&A dataset using the configured parameters.")
+st.markdown("""
+Click the button below to begin the fine-tuning process. 
+This is configured for the fastest possible training:
+- Using GPT-3.5-turbo
+- 1 epoch
+- Small dataset
+- Large batch size
+""")
 
 # Training button
 if st.button("Start Training"):
     try:
-        with st.spinner("Training in progress..."):
-            trainer_stats = trainer.train()
+        with st.spinner("Preparing training data..."):
+            # Save training data to a JSONL file
+            training_file_path = "training_data.jsonl"
             
-            # Display training metrics
-            st.subheader("Training Statistics")
-            col1, col2 = st.columns(2)
+            # Use smaller subset
+            training_data = dataset[:subset_size]
             
-            with col1:
-                st.metric("Training Loss", f"{trainer_stats.training_loss:.4f}")
-            with col2:
-                st.metric("Steps", f"{trainer_stats.global_step}")
+            with open(training_file_path, 'w') as f:
+                for item in training_data:
+                    f.write(json.dumps(item) + '\n')
             
-            # Save the model
-            trainer.save_model()
-            tokenizer.save_pretrained("fine_tuned_model")
-            
-            # Create a zip file of the saved model
-            import shutil
-            shutil.make_archive("fine_tuned_model", 'zip', "fine_tuned_model")
-            
-            # Display download button
-            with open("fine_tuned_model.zip", "rb") as file:
-                st.download_button(
-                    label="Download Fine-tuned Model",
-                    data=file,
-                    file_name="fine_tuned_model.zip",
-                    mime="application/zip"
+            # Upload the training file
+            with open(training_file_path, 'rb') as f:
+                training_file = openai.files.create(
+                    file=f,
+                    purpose='fine-tune'
                 )
             
-            st.success("Training completed successfully! Model has been saved.")
+            st.success("Training file uploaded successfully!")
+            
+            # Start fine-tuning
+            with st.spinner("Starting fine-tuning job..."):
+                fine_tune_job = openai.fine_tuning.jobs.create(
+                    training_file=training_file.id,
+                    model=model_name,
+                    hyperparameters={
+                        "n_epochs": n_epochs,
+                        "batch_size": batch_size
+                    }
+                )
+                
+                st.info("Fine-tuning job started! This should be much faster now.")
+                st.write(f"Job ID: {fine_tune_job.id}")
+                
+                # Monitor the job status
+                while True:
+                    job_status = openai.fine_tuning.jobs.retrieve(fine_tune_job.id)
+                    st.write(f"Status: {job_status.status}")
+                    
+                    if job_status.status in ['succeeded', 'failed']:
+                        break
+                    
+                    time.sleep(30)  # Check status every 30 seconds instead of 60
+                
+                if job_status.status == 'succeeded':
+                    st.success("Fine-tuning completed successfully!")
+                    st.write(f"Fine-tuned model: {job_status.fine_tuned_model}")
+                    
+                    # Save the fine-tuned model name to a file
+                    with open("fine_tuned_model.txt", "w") as f:
+                        f.write(job_status.fine_tuned_model)
+                    
+                    st.info("You can now use this model in the 'Test Fine-tuned Model' page!")
+                else:
+                    st.error("Fine-tuning failed!")
+                    st.write(f"Error: {job_status.error}")
+            
     except Exception as e:
         st.error(f"Error during training: {str(e)}")
 
@@ -212,16 +167,24 @@ st.markdown("---")
 with st.expander("About the Tech Stack"):
     st.markdown("""
     ### Technologies Used
-    - **Base Model**: GPT-2 (Hugging Face Transformers)
-    - **Fine-tuning Method**: LoRA (Low-Rank Adaptation)
+    - **Base Model**: GPT-3.5-turbo (OpenAI)
+    - **Fine-tuning Method**: OpenAI's Fine-tuning API
     - **Dataset**: Psychology Q&A Dataset
-    - **Framework**: PyTorch
     - **UI**: Streamlit
     
-    ### Why LoRA?
-    LoRA is an efficient fine-tuning method that:
-    - Reduces memory usage
-    - Speeds up training
-    - Maintains model quality
-    - Allows for easy model switching
+    ### Why GPT-3.5-turbo?
+    - Faster training than GPT-4
+    - Lower cost
+    - Sufficient for most use cases
+    
+    ### Training Time Optimization
+    Current configuration for fastest training:
+    - Using GPT-3.5-turbo only
+    - Fixed 1 epoch
+    - Small dataset (5-50 examples)
+    - Large batch size (16-32)
+    - 30-second status check intervals
+    
+    ### Note
+    Fine-tuning GPT-3 requires an OpenAI API key and will incur costs based on usage.
     """)

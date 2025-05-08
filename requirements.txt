@@ -9,3 +9,4 @@ peft
 accelerate
 bitsandbytes
 datasets
+openai
