@@ -136,6 +136,23 @@ model = get_peft_model(model, lora_config)
 # Convert our data to a HuggingFace Dataset
 train_dataset = Dataset.from_dict({"text": dataset["text"]})
 
+# Tokenize the dataset
+def tokenize_function(examples):
+    return tokenizer(
+        examples["text"],
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt"
+    )
+
+# Apply tokenization to the dataset
+tokenized_dataset = train_dataset.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=train_dataset.column_names
+)
+
 # Create trainer with SFTConfig
 sft_config = SFTConfig(
     dataset_text_field="text"
@@ -144,9 +161,8 @@ sft_config = SFTConfig(
 # Create trainer
 trainer = SFTTrainer(
     model=model,
-    train_dataset=train_dataset,
-    args=training_args,
-    formatting_func=lambda x: x["text"]
+    train_dataset=tokenized_dataset,
+    args=training_args
 )
 
 # Training section
