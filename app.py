@@ -138,13 +138,19 @@ train_dataset = Dataset.from_dict({"text": dataset["text"]})
 
 # Tokenize the dataset
 def tokenize_function(examples):
-    return tokenizer(
+    # Tokenize the text
+    tokenized = tokenizer(
         examples["text"],
         padding=True,
         truncation=True,
         max_length=max_length,
         return_tensors="pt"
     )
+    
+    # For causal language modeling, the labels are the same as the input_ids
+    tokenized["labels"] = tokenized["input_ids"].clone()
+    
+    return tokenized
 
 # Apply tokenization to the dataset
 tokenized_dataset = train_dataset.map(
