@@ -2,7 +2,7 @@ import streamlit as st
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from datasets import load_dataset
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 from transformers import TrainingArguments
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import platform
@@ -136,11 +136,17 @@ model = get_peft_model(model, lora_config)
 # Convert our data to a HuggingFace Dataset
 train_dataset = Dataset.from_dict({"text": dataset["text"]})
 
+# Create trainer with SFTConfig
+sft_config = SFTConfig(
+    dataset_text_field="text"
+)
+
 # Create trainer
 trainer = SFTTrainer(
     model=model,
     train_dataset=train_dataset,
-    args=training_args
+    args=training_args,
+    sft_config=sft_config
 )
 
 # Training section
