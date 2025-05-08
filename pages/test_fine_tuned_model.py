@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import json
 import os
 
@@ -20,7 +20,7 @@ The fine-tuned model has been trained on psychology Q&A data.
 # API Key input
 api_key = st.text_input("Enter your OpenAI API Key", type="password")
 if api_key:
-    openai.api_key = api_key
+    client = OpenAI(api_key=api_key)
 else:
     st.warning("Please enter your OpenAI API key to continue")
     st.stop()
@@ -64,7 +64,7 @@ if st.button("Compare Responses"):
             
             # Function to generate response
             def generate_response(model_name):
-                return openai.ChatCompletion.create(
+                return client.chat.completions.create(
                     model=model_name,
                     messages=[
                         {"role": "system", "content": "You are a helpful psychology assistant."},
